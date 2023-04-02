@@ -30,6 +30,10 @@
 #if BOTH(HAS_MARLINUI_MENU, ASSISTED_TRAMMING_WIZARD)
 
 #include "menu_item.h"
+#if BOTH(TRAMMING_WIZARD_VISUAL, TFT_COLOR_UI)
+  #include "../tft/tft.h"
+  #include "../tft/touch.h"
+#endif
 
 #include "../../feature/tramming.h"
 #include "../../module/planner.h"
@@ -44,6 +48,9 @@
 #if HAS_LEVELING
   #include "../../feature/bedlevel/bedlevel.h"
 #endif
+
+#define DEBUG_OUT 1
+#include "../../core/debug_out.h"
 
 //#define SIMULATOR_TESTING
 
@@ -72,7 +79,7 @@ static void menu_tramming_wizard();
   static float _mock_probe_at_point(const xy_pos_t pos) {
     do_blocking_move_to_xy(pos, 100.0f);
 
-    const float FL_z = 2, FR_z = -5, BL_z = 0, BR_z = 3; // bed corner Z values from which to interpolate
+    const float FL_z = 2, FR_z = -5, BL_z = 0, BR_z = 8; // bed corner Z values from which to interpolate
     float FX_z = (FR_z - FL_z) / X_BED_SIZE * pos.x + FL_z;
     float BX_z = (BR_z - BL_z) / X_BED_SIZE * pos.x + BL_z;
     float YX_z = (BX_z - FX_z) / Y_BED_SIZE * pos.y + FX_z;
@@ -120,10 +127,14 @@ static void _set_reference_z(float z) {
 
 static bool _probe_single_point() {
 
+  DEBUG_ECHOLNPGM("Probing ", tram_target);
+
   bool probing_reference = !reference_valid;
+  uint8_t t = tram_target;
 
   if (probing_reference) {
-    ui.goto_message_screen(GET_TEXT_F(MSG_TW_MEASURING_REF), FPSTR(pgm_read_ptr(&tramming_point_name[tram_target])));
+    DEBUG_ECHOLNPGM("PROBING REFERENCE", t);
+    ui.goto_message_screen(GET_TEXT_F(MSG_TW_MEASURING_REF), FPSTR(pgm_read_ptr(&tramming_point_name[t])));
   }
 
   #if HAS_LEVELING
@@ -131,28 +142,32 @@ static bool _probe_single_point() {
     set_bed_leveling_enabled(false);
   #endif
 
+  DEBUG_ECHOLNPGM("Reference ", probing_reference, " is valid ", z_isvalid[t]);
+
   const float z_probed_height = probing_reference && z_isvalid[tram_target] ?
     z_measured[tram_target] :
     #ifndef SIMULATOR_TESTING
       probe.probe_at_point(tramming_points[tram_target], PROBE_PT_RAISE, 0, true)
     #else  
-      _mock_probe_at_point(tramming_points[tram_target]);
+      _mock_probe_at_point(tramming_points[t]);
     #endif  
     ;
+  
+  DEBUG_ECHO(z_probed_height);
 
 
-  z_isvalid.clear(tram_target);
+  z_isvalid.clear(t);
   const bool v = !isnan(z_probed_height);
 
   if (v) {
-    z_measured[tram_target] = z_probed_height;
-    z_isvalid.set(tram_target);
+    z_measured[t] = z_probed_height;
+    z_isvalid.set(t);
 
     if (probing_reference) {
       _set_reference_z(z_probed_height);
     } else { // _set_reference_z internally calls _update_screw_turns_str_in_buffer, no need to repeat
       #ifdef TRAMMING_SCREW_THREAD
-        _update_screw_turns_str_in_buffer(tram_target);
+        _update_screw_turns_str_in_buffer(t);
       #endif
     }
   }
@@ -259,6 +274,143 @@ static void menu_tramming_wizard() {
   END_MENU();
 }
 
+#ifdef TRAMMING_WIZARD_VISUAL
+  void _handle_touch(touch_event_t* e) {
+    DEBUG_ECHOLNPGM("Handler activated for e: ", e->index);
+    tram_target = e->index;
+    _probe_single_point(); ui.refresh();
+  }
+
+  #define BTN_BORDER 2
+  #define BTN_MARGIN 2
+  #define BTN_TEXT_PAD 1
+  uint8_t _drawButton(uint16_t x, uint16_t y, uint16_t w, bool sel, const char* str){
+
+    tft_string.set(str);
+
+    uint16_t txt_color = !sel ? COLOR_WHITE : COLOR_BLACK;
+    uint16_t btn_color = sel ? COLOR_WHITE : COLOR_BACKGROUND;
+
+    
+    uint8_t BTN_HEIGHT = tft_string.font_height()+BTN_BORDER+BTN_TEXT_PAD;
+    
+    tft.add_bar(BTN_MARGIN, y, w-BTN_MARGIN*2, BTN_HEIGHT, COLOR_WHITE);
+    tft.add_bar(BTN_MARGIN+BTN_BORDER, y+BTN_BORDER, w-(BTN_MARGIN+BTN_BORDER)*2, BTN_HEIGHT-2*BTN_BORDER, btn_color);
+    tft.add_text(BTN_MARGIN+BTN_BORDER+BTN_TEXT_PAD + tft_string.center(w-2*(BTN_MARGIN+BTN_BORDER+BTN_TEXT_PAD)), y+BTN_BORDER+BTN_TEXT_PAD, txt_color, tft_string, w-2*(BTN_MARGIN+BTN_BORDER+BTN_TEXT_PAD));
+    
+    return tft_string.font_height() + 2*(BTN_BORDER+BTN_MARGIN+BTN_TEXT_PAD);
+  }
+
+  #define RESERVE_FOR_BUTTONS 120
+  #define TP_W 70
+  #define TP_RAD (TP_W / 2)
+  #define BED_SPACE _MIN((TFT_WIDTH - RESERVE_FOR_BUTTONS), TFT_HEIGHT)
+
+  void menu_tramming_wizard_gui() {
+    DEBUG_ECHOLNPGM("Wizard gui menu", BED_SPACE);
+    
+    touch.reset();
+    tft.queue.reset();
+    
+    tft.fill(0, 0, TFT_WIDTH, TFT_HEIGHT, COLOR_BACKGROUND);
+
+    tft.canvas(0,0,BED_SPACE,BED_SPACE);
+    tft.set_background(COLOR_WHITE);
+    tft.fill(2, 2, BED_SPACE - 4, BED_SPACE - 4, COLOR_BLACK);
+
+    tft_string.set("-0.01");
+    uint8_t tw_p = tft_string.width() + 2;
+
+    for(uint8_t t=0; t<G35_PROBE_COUNT; t++) {
+      int16_t x = tramming_points[t].x / X_BED_SIZE * (BED_SPACE - 4)  - tw_p/2,
+              y = ABS(tramming_points[t].y - Y_BED_SIZE)/ Y_BED_SIZE * (BED_SPACE - 4)  - tw_p/2;
+      LIMIT(x, 2, BED_SPACE - 2 -tw_p);
+      LIMIT(y,2, BED_SPACE - 2 -tw_p);
+
+      //DEBUG_ECHOLNPGM("Setup canvas at: x:" , x, ", y: ", y);
+
+      uint8_t r = 255;
+      uint8_t g = 255;
+      uint8_t b = 255;
+      if (z_isvalid[t]) {
+        float diff_z = z_measured[t] - reference_z;
+        LIMIT(diff_z, -2, 2);
+        diff_z /= 5;
+        r = _MIN(255 - (255 * diff_z), 255);
+        g = _MIN(255 + (255 * diff_z), 255);
+        b = _MIN(255, r, g);
+        // for 0 <= diff_z <= 1
+        //b =  _MAX(0 + (255 * diff_z), 0);
+        //g =  _MAX(255 - 255 * (ABS(diff_z)), 0);
+        //r =  _MAX(0 - (255 * diff_z), 0);
+      }
+
+      tft.canvas(x,y,tw_p,tw_p);
+      tft.set_background(RGB(r,g,b));
+
+      touch.add_control(CALLBACK, x,y,tw_p,tw_p, (intptr_t)_handle_touch, t);
+      
+      if (units_mm || !z_isvalid[t] || ABS(z_measured[t] - reference_z) < 0.001f ) {
+        tft_string.set(_get_mms_str(t));
+        tft.add_text(tft_string.center(tw_p), tft_string.vcenter(tw_p), COLOR_BLACK, tft_string, tw_p);
+      } else {
+        tft_string.set(_get_screw_turns_str(t), (uint8_t) 4);
+        tft.add_text(tft_string.center(tw_p), tft_string.vcenter(tw_p) - tft_string.font_height()/3, COLOR_BLACK, tft_string, tw_p);
+        tft_string.set(&(_get_screw_turns_str(t)[4]));
+        tft.add_text(tft_string.center(tw_p), tft_string.vcenter(tw_p)+tft_string.font_height()/3, COLOR_BLACK, tft_string, tw_p); 
+      }
+      
+      
+      tft.queue.sync();
+    }
+
+    constexpr uint16_t menu_space = TFT_WIDTH - BED_SPACE;
+
+    DEBUG_ECHOLN("Setting up menu");
+    tft.canvas(BED_SPACE, 0, menu_space, TFT_HEIGHT);
+    tft.set_background(COLOR_BACKGROUND);
+    tft_string.set("Tramming Wizard");
+    uint16_t offset_y = 5;
+    tft.add_text(tft_string.center(menu_space), offset_y, COLOR_MENU_TEXT, tft_string, menu_space);
+    offset_y += tft_string.font_height() + 5;
+
+    
+    uint8_t btn_height;
+    btn_height =_drawButton(0, offset_y, menu_space, !reference_valid, "Pick Ref Z");
+    touch.add_control(BUTTON, BED_SPACE + BTN_MARGIN, offset_y, menu_space-2*BTN_MARGIN, btn_height, []{ DEBUG_ECHOLN("CLICK PICK REF"); reference_valid = false; ui.refresh(); });
+    offset_y +=  btn_height;
+
+    if (!reference_valid) {
+      btn_height = _drawButton(0, offset_y, menu_space, false, "Z = 0");
+      touch.add_control(BUTTON, BED_SPACE + BTN_MARGIN, offset_y, menu_space-2*BTN_MARGIN, btn_height,[] { _set_reference_z(0); ui.refresh(); } );
+      offset_y += btn_height;
+    }else{ 
+      btn_height = _drawButton(0, offset_y, menu_space, false, "Measure All"); 
+      touch.add_control(BUTTON, BED_SPACE + BTN_MARGIN, offset_y, menu_space-2*BTN_MARGIN, btn_height,[] { touch.reset(); ui.refresh(); DEBUG_ECHOLN("CLICK MEASURE ALL"); _probe_all_points();} );
+      offset_y += btn_height;
+    
+      
+      tft_string.set("Units");
+      tft.add_text(tft_string.center(menu_space), offset_y, COLOR_MENU_TEXT, tft_string, menu_space);
+      offset_y += tft_string.font_height() + 5;
+      
+
+      btn_height = _drawButton(0, offset_y, menu_space, units_mm, "Milimeters"); 
+      touch.add_control(BUTTON, BED_SPACE + BTN_MARGIN, offset_y, menu_space-2*BTN_MARGIN, btn_height,[] { units_mm = true; ui.refresh(); } );
+      offset_y += btn_height;
+      
+      btn_height = _drawButton(0, offset_y, menu_space, !units_mm, "Screw turns"); 
+      touch.add_control(BUTTON, BED_SPACE + BTN_MARGIN, offset_y, menu_space-2*BTN_MARGIN, btn_height,[] { units_mm = false; ui.refresh(); } );
+      offset_y += btn_height;
+    }
+
+    btn_height = _drawButton(0, BED_SPACE-btn_height+2*BTN_MARGIN, menu_space, false, "Exit"); 
+    touch.add_control(BUTTON, BED_SPACE + BTN_MARGIN, BED_SPACE-btn_height, menu_space-2*BTN_MARGIN, btn_height,[]{ probe.stow(); ui.goto_previous_screen_no_defer();} );
+
+    tft.queue.sync();
+  }
+#endif //TRAMMING_WIZARD_VISUAL
+
 // Init the wizard and enter the submenu
 void goto_tramming_wizard() {
   ui.defer_status_screen();
@@ -273,10 +425,17 @@ void goto_tramming_wizard() {
   set_all_unhomed();
   queue.inject(TERN(CAN_SET_LEVELING_AFTER_G28, F("G28L0"), FPSTR(G28_STR)));
 
+
+  DEBUG_ECHOLN("wizard start");
+
   ui.goto_screen([]{
     _lcd_draw_homing();
     if (all_axes_homed())
+    #ifdef TRAMMING_WIZARD_VISUAL
+        ui.goto_screen(menu_tramming_wizard_gui);
+    #else
       ui.goto_screen(menu_tramming_wizard);
+    #endif
   });
 }
 

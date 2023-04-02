@@ -74,7 +74,15 @@ class TFT {
     static void write_sequence(uint16_t *Data, uint16_t Count) { io.WriteSequenceDMA(Data, Count); }
     static void set_window(uint16_t Xmin, uint16_t Ymin, uint16_t Xmax, uint16_t Ymax) { io.set_window(Xmin, Ymin, Xmax, Ymax); }
 
+    /**
+     * Fills a rectangle with color. X and Y are relative to the screen.
+    */
     static void fill(uint16_t x, uint16_t y, uint16_t width, uint16_t height, uint16_t color) { queue.fill(x, y, width, height, color); }
+    /**
+     * Creates a canvas, which is a rectangular portion of screen to draw on.
+     * To draw on canvas, use set_background or any of the add_ methods.
+     * X and Y of those methods are relative to the canvas.
+    */
     static void canvas(uint16_t x, uint16_t y, uint16_t width, uint16_t height) { queue.canvas(x, y, width, height); }
     static void set_background(uint16_t color) { queue.set_background(color); }
     static void add_text(uint16_t x, uint16_t y, uint16_t color, TFT_String tft_string, uint16_t maxWidth = 0) { queue.add_text(x, y, color, tft_string.string(), maxWidth); }
