@@ -563,9 +563,9 @@ const char* shortenNum(const char * convptr, bool removeWhole0, bool removeUnit)
     i++;
   }
 
-  for (i--; i >= 0; --i) {
+  for (--i; i >= 0; --i) {
     const char c = convptr[i];
-    if (c == ' ' || c == '%' || ((c == '0' || c == '.') && !numberFound && WITHIN(decimalIdx, 0, i))) {
+    if (c == ' ' || c == '%' || ((c == '0' || c == '.') && !numberFound && WITHIN(decimalIdx, 0, i)))
       continue;
 
     numberFound = true;
